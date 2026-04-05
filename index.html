@@ -15,7 +15,7 @@
 <body>
 <header class="header">
     <h1>🏏 Cricket Arena · Tournament Hub</h1>
-    <div class="sub">T20 | Toss | Auto Playoffs</div>
+    <div class="sub">T20 | Toss | Auto Playoffs | Pause & Resume | Rematch</div>
 </header>
 <div class="container">
     <div class="card">
@@ -67,7 +67,10 @@
         <form id="scorecardForm">
             <input type="hidden" id="currentMatchId">
             <div id="inningsContainer"></div>
-            <button type="submit" style="width:100%; margin-top:16px;">💾 Save Match & Update Stats</button>
+            <div style="display: flex; gap: 12px; margin-top: 16px;">
+                <button type="button" id="pauseMatchBtn" style="background: #ff9800; flex:1;">⏸️ Pause & Save Draft</button>
+                <button type="submit" style="background: #4caf50; flex:1;">💾 Complete Match</button>
+            </div>
         </form>
     </div>
 </div>
