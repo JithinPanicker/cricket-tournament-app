@@ -1,4 +1,4 @@
-const CACHE_NAME = "cricket-arena-v3";  // Increment version each time you want a fresh cache
+const CACHE_NAME = "cricket-arena-v3";  // increment version when you change code
 const ASSETS_TO_CACHE = [
     "./",
     "./index.html",
@@ -10,7 +10,7 @@ const ASSETS_TO_CACHE = [
 ];
 
 self.addEventListener("install", (event) => {
-    self.skipWaiting();  // Force waiting service worker to become active
+    self.skipWaiting();  // force waiting SW to become active
     event.waitUntil(
         caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS_TO_CACHE))
     );
@@ -26,11 +26,17 @@ self.addEventListener("activate", (event) => {
             );
         })
     );
-    self.clients.claim();  // Take control of all open pages immediately
+    self.clients.claim();  // take control of all pages immediately
 });
 
 self.addEventListener("fetch", (event) => {
     event.respondWith(
         caches.match(event.request).then((response) => response || fetch(event.request))
     );
+});
+
+self.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+        self.skipWaiting();
+    }
 });
