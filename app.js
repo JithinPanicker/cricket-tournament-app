@@ -1,11 +1,12 @@
 // ---------- DATABASE & INIT ----------
 const db = new Dexie('CricketArenaDB');
-db.version(1).stores({
+db.version(2).stores({
     teams: '++id, name, shortName',
     players: '++id, teamId, name, role, battingOrder',
     tournaments: '++id, name, createdAt, active',
     matches: '++id, tournamentId, teamAId, teamBId, matchType, round, status, winnerId, date, inningsData, isPlayoff, tossWinner, tossDecision, battingFirst',
-    playerStats: '++id, tournamentId, playerId, runs, balls, wickets, runsConceded, oversBowled, innings, highestScore, bestWickets'
+    playerStats: '++id, tournamentId, playerId, runs, balls, wickets, runsConceded, oversBowled, innings, highestScore, bestWickets',
+    matchDrafts: '++id, matchId, draftData, updatedAt'  // new table for paused drafts
 });
 
 const TEAMS_DATA = [
@@ -91,7 +92,7 @@ async function generateLeagueMatches() {
     await refreshAllPanels();
 }
 
-// ---------- AUTO PLAYOFFS (after all 30 league matches) ----------
+// ---------- AUTO PLAYOFFS ----------
 async function autoGeneratePlayoffsIfNeeded() {
     const leagueMatches = await db.matches.where({ tournamentId: currentTournamentId, isPlayoff: 0 }).toArray();
     const completedLeague = leagueMatches.filter(m => m.status === 'completed');
@@ -193,7 +194,7 @@ async function updateTournamentStats(tournamentId, performanceArray) {
     }
 }
 
-// ---------- MATCH UI & SCORECARD WITH TOSS ----------
+// ---------- MATCH UI WITH DRAFT & REMATCH ----------
 async function renderMatchesList() {
     let matches = await db.matches.where({ tournamentId: currentTournamentId }).reverse().sortBy('id');
     let teams = await db.teams.toArray();
@@ -206,15 +207,87 @@ async function renderMatchesList() {
         let teamBName = teamDict[m.teamBId]?.name || 'TBD';
         let statusBadge = m.status === 'completed' ? `✅ ${teamDict[m.winnerId]?.name || 'winner'}` : (m.status==='pending' ? '⏳ Pending' : 'In Progress');
         let tossInfo = m.tossWinner ? `🎲 Toss: ${teamDict[m.tossWinner]?.shortName} chose ${m.tossDecision}` : '';
+        let draftInfo = '';
+        const draft = await db.matchDrafts.where('matchId').equals(m.id).first();
+        if(draft && m.status !== 'completed') draftInfo = ' 📝 Draft saved';
+        let rematchBtn = m.status === 'completed' ? `<button class="rematch-btn" onclick="event.stopPropagation(); rematchMatch(${m.id})">🔄 Rematch</button>` : '';
         html += `<div class="match-item" onclick="openScorecardForMatch(${m.id})">
-                    <div style="display:flex; justify-content:space-between;"><strong>${teamAName} vs ${teamBName}</strong> <span class="badge">${m.matchType || 'League'}</span></div>
-                    <div>${statusBadge}</div>
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <strong>${teamAName} vs ${teamBName}</strong>
+                        <div><span class="badge">${m.matchType || 'League'}</span> ${rematchBtn}</div>
+                    </div>
+                    <div>${statusBadge}${draftInfo}</div>
                     <div style="font-size:12px;">${tossInfo}</div>
                 </div>`;
     }
     container.innerHTML = html;
 }
 
+async function rematchMatch(originalMatchId) {
+    const original = await db.matches.get(originalMatchId);
+    if(!original) return;
+    const { value: confirm } = await Swal.fire({
+        title: 'Rematch?',
+        text: `Create a new match between ${(await db.teams.get(original.teamAId))?.name} and ${(await db.teams.get(original.teamBId))?.name}?`,
+        showCancelButton: true,
+        confirmButtonText: 'Yes, create rematch'
+    });
+    if(!confirm) return;
+    const newMatchId = await db.matches.add({
+        tournamentId: original.tournamentId,
+        teamAId: original.teamAId,
+        teamBId: original.teamBId,
+        matchType: original.matchType === 'league' ? 'league' : 'rematch',
+        status: 'pending',
+        winnerId: null,
+        date: new Date().toISOString(),
+        inningsData: null,
+        isPlayoff: original.isPlayoff,
+        tossWinner: null,
+        tossDecision: null,
+        battingFirst: null
+    });
+    Swal.fire("Rematch created! You can now enter the new match.");
+    await refreshAllPanels();
+}
+
+// ---------- DRAFT SAVE & RESTORE ----------
+async function saveDraft(matchId) {
+    const match = await db.matches.get(matchId);
+    if(!match || match.status === 'completed') return false;
+    // Collect all input values from the scorecard form
+    const container = document.getElementById('inningsContainer');
+    const inputs = container.querySelectorAll('input');
+    const draftData = {};
+    inputs.forEach(inp => {
+        draftData[inp.id || inp.className + '_' + inp.name] = inp.value;
+    });
+    // Also store toss info if already set
+    const tossInfoDiv = document.getElementById('tossInfo');
+    draftData.tossHtml = tossInfoDiv.innerHTML;
+    await db.matchDrafts.put({ matchId, draftData, updatedAt: new Date() });
+    return true;
+}
+
+async function restoreDraft(matchId) {
+    const draft = await db.matchDrafts.where('matchId').equals(matchId).first();
+    if(!draft) return false;
+    const container = document.getElementById('inningsContainer');
+    const inputs = container.querySelectorAll('input');
+    inputs.forEach(inp => {
+        const key = inp.id || inp.className + '_' + inp.name;
+        if(draft.draftData[key] !== undefined) inp.value = draft.draftData[key];
+    });
+    const tossInfoDiv = document.getElementById('tossInfo');
+    if(draft.draftData.tossHtml) tossInfoDiv.innerHTML = draft.draftData.tossHtml;
+    return true;
+}
+
+async function clearDraft(matchId) {
+    await db.matchDrafts.where('matchId').equals(matchId).delete();
+}
+
+// ---------- SCORECARD MODAL (with draft support) ----------
 async function openScorecardForMatch(matchId) {
     let match = await db.matches.get(matchId);
     if(!match) return;
@@ -229,6 +302,7 @@ async function openScorecardForMatch(matchId) {
         let teamDict = Object.fromEntries((await db.teams.toArray()).map(t=>[t.id, t]));
         document.getElementById('tossInfo').innerHTML = `<div class="badge" style="background:#ffe0b5;">Toss: ${teamDict[match.tossWinner]?.name} won and chose to ${match.tossDecision} first.</div>`;
         await loadScorecardForm(match, match.battingFirst);
+        await restoreDraft(matchId);  // restore any saved draft
     } else {
         let teams = await db.teams.toArray();
         let teamA = teams.find(t=>t.id === match.teamAId);
@@ -287,8 +361,21 @@ async function loadScorecardForm(match, battingFirstTeamId) {
         </div>`;
 }
 
-window.closeScorecardModal = () => document.getElementById('scorecardModal').classList.remove('active');
+window.closeScorecardModal = () => {
+    document.getElementById('scorecardModal').classList.remove('active');
+    document.getElementById('currentMatchId').value = '';
+};
 
+// Pause button handler
+document.getElementById('pauseMatchBtn')?.addEventListener('click', async () => {
+    const matchId = parseInt(document.getElementById('currentMatchId').value);
+    if(!matchId) return;
+    await saveDraft(matchId);
+    Swal.fire("Draft saved!", "You can resume this match later.", "success");
+    closeScorecardModal();
+});
+
+// Complete match submission (with draft deletion)
 document.getElementById('scorecardForm').onsubmit = async (e) => {
     e.preventDefault();
     let matchId = parseInt(document.getElementById('currentMatchId').value);
@@ -364,6 +451,7 @@ document.getElementById('scorecardForm').onsubmit = async (e) => {
     match.inningsData = inningsData;
     await db.matches.update(matchId, match);
     await updateTournamentStats(currentTournamentId, statsUpdates);
+    await clearDraft(matchId);  // remove any draft after completion
     Swal.fire("Match saved & stats updated!");
     closeScorecardModal();
     await refreshAllPanels();
@@ -459,3 +547,6 @@ document.querySelectorAll('.tab').forEach(tab=>{
 });
 
 initDB().then(()=>refreshAllPanels());
+
+// Make rematchMatch available globally
+window.rematchMatch = rematchMatch;
