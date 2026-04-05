@@ -1,4 +1,4 @@
-const CACHE_NAME = "cricket-arena-v1";
+const CACHE_NAME = "cricket-arena-v2";
 const ASSETS_TO_CACHE = [
     "./",
     "./index.html",
