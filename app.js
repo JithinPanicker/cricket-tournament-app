@@ -75,7 +75,6 @@ async function generateLeagueMatches() {
         let confirm = await Swal.fire({title: "League matches exist", text: "Replace existing league matches? This will delete previous league matches.", showCancelButton:true});
         if(!confirm.isConfirmed) return;
         await db.matches.where({ tournamentId: currentTournamentId, isPlayoff: 0 }).delete();
-        // also delete playoffs to avoid inconsistency
         await db.matches.where({ tournamentId: currentTournamentId, isPlayoff: 1 }).delete();
     }
     let teamsMap = new Map();
@@ -92,23 +91,20 @@ async function generateLeagueMatches() {
     await refreshAllPanels();
 }
 
-// ---------- AUTO PLAYOFFS (after 10 matches per team) ----------
+// ---------- AUTO PLAYOFFS (after all 30 league matches) ----------
 async function autoGeneratePlayoffsIfNeeded() {
-    // Count completed league matches
     const leagueMatches = await db.matches.where({ tournamentId: currentTournamentId, isPlayoff: 0 }).toArray();
     const completedLeague = leagueMatches.filter(m => m.status === 'completed');
-    if(completedLeague.length !== 30) return; // only when all 30 league matches done
+    if(completedLeague.length !== 30) return;
 
     const existingPlayoffs = await db.matches.where({ tournamentId: currentTournamentId, isPlayoff: 1 }).count();
-    if(existingPlayoffs > 0) return; // playoffs already exist
+    if(existingPlayoffs > 0) return;
 
-    // Compute standings top 4
     const standings = await computeStandings();
     if(standings.length < 4) return;
     const top4 = standings.slice(0,4).map(s => s.teamId);
     const [first, second, third, fourth] = top4;
 
-    // Create playoff matches: Qualifier1, Eliminator, Qualifier2, Final
     await db.matches.add({ tournamentId: currentTournamentId, teamAId: first, teamBId: second, matchType: "Qualifier 1", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null });
     await db.matches.add({ tournamentId: currentTournamentId, teamAId: third, teamBId: fourth, matchType: "Eliminator", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null });
     await db.matches.add({ tournamentId: currentTournamentId, teamAId: null, teamBId: null, matchType: "Qualifier 2", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null });
@@ -222,7 +218,6 @@ async function renderMatchesList() {
 async function openScorecardForMatch(matchId) {
     let match = await db.matches.get(matchId);
     if(!match) return;
-    // If match already completed, do not allow editing again
     if(match.status === 'completed') {
         Swal.fire("Match already completed", "You cannot edit a finished match.", "info");
         return;
@@ -230,13 +225,11 @@ async function openScorecardForMatch(matchId) {
     document.getElementById('currentMatchId').value = matchId;
     document.getElementById('modalMatchTitle').innerHTML = `Enter Scorecard: ${(await db.teams.get(match.teamAId))?.name} vs ${(await db.teams.get(match.teamBId))?.name}`;
     
-    // Show toss info if already decided, else ask for toss
     if(match.tossWinner && match.tossDecision) {
         let teamDict = Object.fromEntries((await db.teams.toArray()).map(t=>[t.id, t]));
         document.getElementById('tossInfo').innerHTML = `<div class="badge" style="background:#ffe0b5;">Toss: ${teamDict[match.tossWinner]?.name} won and chose to ${match.tossDecision} first.</div>`;
         await loadScorecardForm(match, match.battingFirst);
     } else {
-        // Ask for toss
         let teams = await db.teams.toArray();
         let teamA = teams.find(t=>t.id === match.teamAId);
         let teamB = teams.find(t=>t.id === match.teamBId);
@@ -300,8 +293,7 @@ document.getElementById('scorecardForm').onsubmit = async (e) => {
     e.preventDefault();
     let matchId = parseInt(document.getElementById('currentMatchId').value);
     let match = await db.matches.get(matchId);
-    if(!match) return;
-    if(match.status === 'completed') { Swal.fire("Already completed"); closeScorecardModal(); return; }
+    if(!match || match.status === 'completed') { Swal.fire("Invalid or already completed"); closeScorecardModal(); return; }
 
     let teamA = match.teamAId, teamB = match.teamBId;
     let battingFirstId = match.battingFirst;
@@ -309,19 +301,15 @@ document.getElementById('scorecardForm').onsubmit = async (e) => {
 
     let playersA = await db.players.where('teamId').equals(teamA).toArray();
     let playersB = await db.players.where('teamId').equals(teamB).toArray();
-    let teamADict = Object.fromEntries(playersA.map(p=>[p.id, p]));
-    let teamBDict = Object.fromEntries(playersB.map(p=>[p.id, p]));
 
     let inningsData = { teamARuns:0, teamAOver:0, teamBRuns:0, teamBOver:0 };
     let statsUpdates = [];
 
-    // Determine which team bats first
     let firstBatTeamId = battingFirstId;
     let firstBowlTeamId = firstBatTeamId === teamA ? teamB : teamA;
     let firstBatPlayersList = firstBatTeamId === teamA ? playersA : playersB;
     let firstBowlPlayersList = firstBowlTeamId === teamA ? playersA : playersB;
 
-    // Innings 1
     let totalRuns1 = 0, totalOvers1 = 0;
     for(let p of firstBatPlayersList) {
         let runs = parseInt(document.querySelector(`.runs_${firstBatTeamId}_${p.id}`)?.value) || 0;
@@ -339,12 +327,9 @@ document.getElementById('scorecardForm').onsubmit = async (e) => {
     }
     let extras1 = parseInt(document.getElementById('extras1')?.value) || 0;
     totalRuns1 += extras1;
-    inningsData.teamARuns = (firstBatTeamId === teamA) ? totalRuns1 : 0;
-    inningsData.teamBRuns = (firstBatTeamId === teamB) ? totalRuns1 : 0;
-    inningsData.teamAOver = (firstBatTeamId === teamA) ? totalOvers1 : 0;
-    inningsData.teamBOver = (firstBatTeamId === teamB) ? totalOvers1 : 0;
+    if(firstBatTeamId === teamA) { inningsData.teamARuns = totalRuns1; inningsData.teamAOver = totalOvers1; }
+    else { inningsData.teamBRuns = totalRuns1; inningsData.teamBOver = totalOvers1; }
 
-    // Innings 2
     let secondBatTeamId = firstBatTeamId === teamA ? teamB : teamA;
     let secondBowlTeamId = secondBatTeamId === teamA ? teamB : teamA;
     let secondBatPlayersList = secondBatTeamId === teamA ? playersA : playersB;
@@ -367,15 +352,12 @@ document.getElementById('scorecardForm').onsubmit = async (e) => {
     }
     let extras2 = parseInt(document.getElementById('extras2')?.value) || 0;
     totalRuns2 += extras2;
-    if(secondBatTeamId === teamA) inningsData.teamARuns = totalRuns2;
-    else inningsData.teamBRuns = totalRuns2;
-    if(secondBatTeamId === teamA) inningsData.teamAOver = totalOvers2;
-    else inningsData.teamBOver = totalOvers2;
+    if(secondBatTeamId === teamA) { inningsData.teamARuns = totalRuns2; inningsData.teamAOver = totalOvers2; }
+    else { inningsData.teamBRuns = totalRuns2; inningsData.teamBOver = totalOvers2; }
 
     let winnerId = null;
     if(inningsData.teamARuns > inningsData.teamBRuns) winnerId = teamA;
     else if(inningsData.teamBRuns > inningsData.teamARuns) winnerId = teamB;
-    // tie not handled for simplicity
 
     match.status = "completed";
     match.winnerId = winnerId;
@@ -385,11 +367,10 @@ document.getElementById('scorecardForm').onsubmit = async (e) => {
     Swal.fire("Match saved & stats updated!");
     closeScorecardModal();
     await refreshAllPanels();
-    // After every match, check if all league matches are done and auto-create playoffs
     await autoGeneratePlayoffsIfNeeded();
 };
 
-// ---------- FORCE PLAYOFFS BUTTON ----------
+// ---------- FORCE PLAYOFFS ----------
 async function forceGeneratePlayoffs() {
     if(!currentTournamentId) return;
     const existing = await db.matches.where({ tournamentId: currentTournamentId, isPlayoff: 1 }).count();
@@ -410,13 +391,34 @@ async function forceGeneratePlayoffs() {
     await refreshAllPanels();
 }
 
-// ---------- REFRESH ALL ----------
+// ---------- REFRESH & UPDATE BUTTON ----------
 async function refreshAllPanels() {
     if(!currentTournamentId) return;
     await renderMatchesList();
     await computePlayerStats();
     await renderPointsTable();
 }
+
+document.getElementById('checkUpdatesBtn')?.addEventListener('click', async () => {
+    if ('serviceWorker' in navigator) {
+        const registration = await navigator.serviceWorker.getRegistration();
+        if (registration) {
+            await registration.update();
+            if (registration.waiting) {
+                registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+                Swal.fire("Updating...", "App will reload in a moment.", "info");
+            } else {
+                Swal.fire("Already up to date!", "No new version found.", "info");
+            }
+        }
+    }
+});
+
+navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+        window.location.reload();
+    }
+});
 
 // ---------- EVENT LISTENERS ----------
 document.getElementById('tournamentSelect').addEventListener('change', switchTournament);
@@ -440,7 +442,6 @@ document.getElementById('createCustomMatchBtn').onclick = async () => {
     }
 };
 
-// TABS
 document.querySelectorAll('.tab').forEach(tab=>{
     tab.addEventListener('click',()=>{
         document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
