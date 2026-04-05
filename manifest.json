@@ -1,0 +1,16 @@
+{
+  "name": "Cricket Arena Tournament Manager",
+  "short_name": "Cricket Arena",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f0f2f5",
+  "theme_color": "#0f4c5c",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

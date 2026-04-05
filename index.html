@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Cricket Arena | Tournament Manager</title>
+    <link rel="apple-touch-icon" href="icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+</head>
+<body>
+<header class="header">
+    <h1>🏏 Cricket Arena · Tournament Hub</h1>
+    <div class="sub">Offline | Live Stats | Orange/Purple Cap</div>
+</header>
+<div class="container">
+    <div class="card">
+        <div class="flex-row">
+            <select id="tournamentSelect"></select>
+            <button id="newTournamentBtn" class="btn-outline">✨ New Tournament</button>
+        </div>
+        <div class="tab-bar">
+            <div class="tab active" data-tab="dashboard">📊 Stats</div>
+            <div class="tab" data-tab="matches">🏆 Matches</div>
+            <div class="tab" data-tab="standings">📋 Standings</div>
+            <div class="tab" data-tab="schedule">⚙️ Schedule</div>
+        </div>
+
+        <!-- DASHBOARD PANEL -->
+        <div id="dashboardPanel">
+            <div class="stat-grid">
+                <div class="stat-badge"><div>🏆 ORANGE CAP</div><div id="orangeCapName" class="stat-number">-</div><div id="orangeCapRuns" class="stat-small"></div></div>
+                <div class="stat-badge"><div>💜 PURPLE CAP</div><div id="purpleCapName" class="stat-number">-</div><div id="purpleCapWkts" class="stat-small"></div></div>
+            </div>
+            <div class="card-title">🔥 Top Run Getters</div>
+            <div id="topRunsList" class="player-list"></div>
+            <div class="card-title">🎯 Top Wicket Takers</div>
+            <div id="topWicketsList" class="player-list"></div>
+        </div>
+
+        <!-- MATCHES PANEL -->
+        <div id="matchesPanel" class="hidden-panel">
+            <div class="flex-row"><button id="createCustomMatchBtn" class="btn-orange">➕ Create Custom Match</button></div>
+            <div id="matchesListContainer"></div>
+        </div>
+
+        <!-- STANDINGS PANEL -->
+        <div id="standingsPanel" class="hidden-panel"><div id="pointsTable"></div></div>
+
+        <!-- SCHEDULE ACTIONS -->
+        <div id="schedulePanel" class="hidden-panel">
+            <button id="genLeagueBtn" style="background:#2c6e2f;">📅 Generate Double Round-Robin (30 matches)</button>
+            <button id="genPlayoffsBtn" style="background:#b85c00;">🏆 Generate Playoffs (Qualifier + Final)</button>
+            <p class="note">* Playoffs use current standings top 4.</p>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: MATCH SCORECARD -->
+<div id="scorecardModal" class="modal">
+    <div class="modal-content">
+        <div class="close-modal" onclick="closeScorecardModal()">&times;</div>
+        <h3 id="modalMatchTitle">Enter Match Result</h3>
+        <form id="scorecardForm">
+            <input type="hidden" id="currentMatchId">
+            <div id="inningsContainer"></div>
+            <button type="submit" style="width:100%; margin-top:16px;">💾 Save Match & Update Stats</button>
+        </form>
+    </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
