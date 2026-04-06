@@ -1,12 +1,12 @@
 // ---------- DATABASE & INIT ----------
 const db = new Dexie('CricketArenaDB');
-db.version(2).stores({
+db.version(5).stores({
     teams: '++id, name, shortName',
     players: '++id, teamId, name, role, battingOrder',
     tournaments: '++id, name, createdAt, active',
-    matches: '++id, tournamentId, teamAId, teamBId, matchType, round, status, winnerId, date, inningsData, isPlayoff, tossWinner, tossDecision, battingFirst',
+    matches: '++id, tournamentId, teamAId, teamBId, matchType, round, status, winnerId, date, inningsData, isPlayoff, tossWinner, tossDecision, battingFirst, rawScorecard',
     playerStats: '++id, tournamentId, playerId, runs, balls, wickets, runsConceded, oversBowled, innings, highestScore, bestWickets',
-    matchDrafts: '++id, matchId, draftData, updatedAt'  // new table for paused drafts
+    matchDrafts: '++id, matchId, draftData, updatedAt'
 });
 
 const TEAMS_DATA = [
@@ -85,7 +85,7 @@ async function generateLeagueMatches() {
         let teamAId = teamsMap.get(fix[0]);
         let teamBId = teamsMap.get(fix[1]);
         if(teamAId && teamBId) {
-            await db.matches.add({ tournamentId: currentTournamentId, teamAId, teamBId, matchType: "league", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 0, tossWinner: null, tossDecision: null, battingFirst: null });
+            await db.matches.add({ tournamentId: currentTournamentId, teamAId, teamBId, matchType: "league", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 0, tossWinner: null, tossDecision: null, battingFirst: null, rawScorecard: null });
         }
     }
     Swal.fire("Generated 30 league matches!");
@@ -106,10 +106,10 @@ async function autoGeneratePlayoffsIfNeeded() {
     const top4 = standings.slice(0,4).map(s => s.teamId);
     const [first, second, third, fourth] = top4;
 
-    await db.matches.add({ tournamentId: currentTournamentId, teamAId: first, teamBId: second, matchType: "Qualifier 1", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null });
-    await db.matches.add({ tournamentId: currentTournamentId, teamAId: third, teamBId: fourth, matchType: "Eliminator", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null });
-    await db.matches.add({ tournamentId: currentTournamentId, teamAId: null, teamBId: null, matchType: "Qualifier 2", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null });
-    await db.matches.add({ tournamentId: currentTournamentId, teamAId: null, teamBId: null, matchType: "Final", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null });
+    await db.matches.add({ tournamentId: currentTournamentId, teamAId: first, teamBId: second, matchType: "Qualifier 1", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null, rawScorecard: null });
+    await db.matches.add({ tournamentId: currentTournamentId, teamAId: third, teamBId: fourth, matchType: "Eliminator", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null, rawScorecard: null });
+    await db.matches.add({ tournamentId: currentTournamentId, teamAId: null, teamBId: null, matchType: "Qualifier 2", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null, rawScorecard: null });
+    await db.matches.add({ tournamentId: currentTournamentId, teamAId: null, teamBId: null, matchType: "Final", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null, rawScorecard: null });
 
     Swal.fire("All league matches completed! Playoffs have been automatically created.");
     await refreshAllPanels();
@@ -155,7 +155,53 @@ async function renderPointsTable() {
     document.getElementById('pointsTable').innerHTML = html;
 }
 
-// ---------- PLAYER STATS & CAPS ----------
+// ---------- STATS REBUILD (used after edit) ----------
+async function rebuildAllStats(tournamentId) {
+    await db.playerStats.where({ tournamentId }).delete();
+    const matches = await db.matches.where({ tournamentId, status: 'completed' }).toArray();
+    for(let match of matches) {
+        if(match.rawScorecard) {
+            let playersA = await db.players.where('teamId').equals(match.teamAId).toArray();
+            let playersB = await db.players.where('teamId').equals(match.teamBId).toArray();
+            let allPlayers = [...playersA, ...playersB];
+            for(let key in match.rawScorecard) {
+                if(key.startsWith('runs_')) {
+                    let parts = key.split('_');
+                    let teamId = parseInt(parts[1]);
+                    let playerId = parseInt(parts[2]);
+                    let runs = parseInt(match.rawScorecard[key]) || 0;
+                    let ballsKey = key.replace('runs_', 'balls_');
+                    let balls = parseInt(match.rawScorecard[ballsKey]) || 0;
+                    let existing = await db.playerStats.where({ tournamentId, playerId }).first();
+                    if(!existing) existing = { tournamentId, playerId, runs:0, balls:0, wickets:0, runsConceded:0, oversBowled:0, highestScore:0, bestWickets:0 };
+                    existing.runs += runs;
+                    existing.balls += balls;
+                    if(runs > existing.highestScore) existing.highestScore = runs;
+                    await db.playerStats.put(existing);
+                }
+                if(key.startsWith('wickets_')) {
+                    let parts = key.split('_');
+                    let teamId = parseInt(parts[1]);
+                    let playerId = parseInt(parts[2]);
+                    let wickets = parseInt(match.rawScorecard[key]) || 0;
+                    let runsConcKey = key.replace('wickets_', 'runsConc_');
+                    let runsConc = parseInt(match.rawScorecard[runsConcKey]) || 0;
+                    let oversKey = key.replace('wickets_', 'overs_');
+                    let overs = parseFloat(match.rawScorecard[oversKey]) || 0;
+                    let existing = await db.playerStats.where({ tournamentId, playerId }).first();
+                    if(!existing) existing = { tournamentId, playerId, runs:0, balls:0, wickets:0, runsConceded:0, oversBowled:0, highestScore:0, bestWickets:0 };
+                    existing.wickets += wickets;
+                    existing.runsConceded += runsConc;
+                    existing.oversBowled += overs;
+                    if(wickets > existing.bestWickets) existing.bestWickets = wickets;
+                    await db.playerStats.put(existing);
+                }
+            }
+        }
+    }
+}
+
+// ---------- PLAYER STATS & CAPS (from rebuilt stats) ----------
 async function computePlayerStats() {
     let stats = await db.playerStats.where({ tournamentId: currentTournamentId }).toArray();
     let players = await db.players.toArray();
@@ -175,26 +221,7 @@ async function computePlayerStats() {
     document.getElementById('purpleCapWkts').innerText = purple ? `${purple.wickets} wickets` : '';
 }
 
-async function updateTournamentStats(tournamentId, performanceArray) {
-    for(let perf of performanceArray) {
-        let existing = await db.playerStats.where({ tournamentId, playerId: perf.playerId }).first();
-        if(!existing) existing = { tournamentId, playerId: perf.playerId, runs:0, balls:0, wickets:0, runsConceded:0, oversBowled:0, highestScore:0, bestWickets:0 };
-        if(perf.type === 'bat') {
-            existing.runs += perf.runs;
-            existing.balls += perf.balls;
-            if(perf.runs > existing.highestScore) existing.highestScore = perf.runs;
-        }
-        if(perf.type === 'bowl') {
-            existing.wickets += perf.wickets;
-            existing.runsConceded += perf.runsConc;
-            existing.oversBowled += perf.overs;
-            if(perf.wickets > existing.bestWickets) existing.bestWickets = perf.wickets;
-        }
-        await db.playerStats.put(existing);
-    }
-}
-
-// ---------- MATCH UI WITH DRAFT & REMATCH ----------
+// ---------- MATCH UI WITH EDIT & REMATCH ----------
 async function renderMatchesList() {
     let matches = await db.matches.where({ tournamentId: currentTournamentId }).reverse().sortBy('id');
     let teams = await db.teams.toArray();
@@ -210,11 +237,15 @@ async function renderMatchesList() {
         let draftInfo = '';
         const draft = await db.matchDrafts.where('matchId').equals(m.id).first();
         if(draft && m.status !== 'completed') draftInfo = ' 📝 Draft saved';
-        let rematchBtn = m.status === 'completed' ? `<button class="rematch-btn" onclick="event.stopPropagation(); rematchMatch(${m.id})">🔄 Rematch</button>` : '';
+        let actionButtons = '';
+        if(m.status === 'completed') {
+            actionButtons = `<button class="edit-btn" onclick="event.stopPropagation(); editCompletedMatch(${m.id})">✏️ Edit</button>
+                            <button class="rematch-btn" onclick="event.stopPropagation(); rematchMatch(${m.id})">🔄 Rematch</button>`;
+        }
         html += `<div class="match-item" onclick="openScorecardForMatch(${m.id})">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <strong>${teamAName} vs ${teamBName}</strong>
-                        <div><span class="badge">${m.matchType || 'League'}</span> ${rematchBtn}</div>
+                        <div><span class="badge">${m.matchType || 'League'}</span> ${actionButtons}</div>
                     </div>
                     <div>${statusBadge}${draftInfo}</div>
                     <div style="font-size:12px;">${tossInfo}</div>
@@ -233,7 +264,7 @@ async function rematchMatch(originalMatchId) {
         confirmButtonText: 'Yes, create rematch'
     });
     if(!confirm) return;
-    const newMatchId = await db.matches.add({
+    await db.matches.add({
         tournamentId: original.tournamentId,
         teamAId: original.teamAId,
         teamBId: original.teamBId,
@@ -245,54 +276,74 @@ async function rematchMatch(originalMatchId) {
         isPlayoff: original.isPlayoff,
         tossWinner: null,
         tossDecision: null,
-        battingFirst: null
+        battingFirst: null,
+        rawScorecard: null
     });
     Swal.fire("Rematch created! You can now enter the new match.");
     await refreshAllPanels();
 }
 
-// ---------- DRAFT SAVE & RESTORE ----------
-async function saveDraft(matchId) {
+async function editCompletedMatch(matchId) {
     const match = await db.matches.get(matchId);
-    if(!match || match.status === 'completed') return false;
-    // Collect all input values from the scorecard form
-    const container = document.getElementById('inningsContainer');
-    const inputs = container.querySelectorAll('input');
-    const draftData = {};
-    inputs.forEach(inp => {
-        draftData[inp.id || inp.className + '_' + inp.name] = inp.value;
-    });
-    // Also store toss info if already set
-    const tossInfoDiv = document.getElementById('tossInfo');
-    draftData.tossHtml = tossInfoDiv.innerHTML;
-    await db.matchDrafts.put({ matchId, draftData, updatedAt: new Date() });
-    return true;
+    if(!match || match.status !== 'completed') return;
+    // Remove stats from this match by rebuilding all stats (excluding this match)
+    await db.playerStats.where({ tournamentId: currentTournamentId }).delete();
+    const otherMatches = await db.matches.where({ tournamentId: currentTournamentId, status: 'completed' }).filter(m => m.id !== matchId).toArray();
+    for(let om of otherMatches) {
+        if(om.rawScorecard) {
+            await applyMatchStatsFromRaw(om);
+        }
+    }
+    // Mark match as pending
+    await db.matches.update(matchId, { status: 'pending', winnerId: null });
+    await refreshAllPanels();
+    // Open scorecard with existing raw data
+    await openScorecardForMatch(matchId, true);
 }
 
-async function restoreDraft(matchId) {
-    const draft = await db.matchDrafts.where('matchId').equals(matchId).first();
-    if(!draft) return false;
-    const container = document.getElementById('inningsContainer');
-    const inputs = container.querySelectorAll('input');
-    inputs.forEach(inp => {
-        const key = inp.id || inp.className + '_' + inp.name;
-        if(draft.draftData[key] !== undefined) inp.value = draft.draftData[key];
-    });
-    const tossInfoDiv = document.getElementById('tossInfo');
-    if(draft.draftData.tossHtml) tossInfoDiv.innerHTML = draft.draftData.tossHtml;
-    return true;
+async function applyMatchStatsFromRaw(match) {
+    if(!match.rawScorecard) return;
+    let playersA = await db.players.where('teamId').equals(match.teamAId).toArray();
+    let playersB = await db.players.where('teamId').equals(match.teamBId).toArray();
+    for(let key in match.rawScorecard) {
+        if(key.startsWith('runs_')) {
+            let parts = key.split('_');
+            let playerId = parseInt(parts[2]);
+            let runs = parseInt(match.rawScorecard[key]) || 0;
+            let ballsKey = key.replace('runs_', 'balls_');
+            let balls = parseInt(match.rawScorecard[ballsKey]) || 0;
+            let existing = await db.playerStats.where({ tournamentId: match.tournamentId, playerId }).first();
+            if(!existing) existing = { tournamentId: match.tournamentId, playerId, runs:0, balls:0, wickets:0, runsConceded:0, oversBowled:0, highestScore:0, bestWickets:0 };
+            existing.runs += runs;
+            existing.balls += balls;
+            if(runs > existing.highestScore) existing.highestScore = runs;
+            await db.playerStats.put(existing);
+        }
+        if(key.startsWith('wickets_')) {
+            let parts = key.split('_');
+            let playerId = parseInt(parts[2]);
+            let wickets = parseInt(match.rawScorecard[key]) || 0;
+            let runsConcKey = key.replace('wickets_', 'runsConc_');
+            let runsConc = parseInt(match.rawScorecard[runsConcKey]) || 0;
+            let oversKey = key.replace('wickets_', 'overs_');
+            let overs = parseFloat(match.rawScorecard[oversKey]) || 0;
+            let existing = await db.playerStats.where({ tournamentId: match.tournamentId, playerId }).first();
+            if(!existing) existing = { tournamentId: match.tournamentId, playerId, runs:0, balls:0, wickets:0, runsConceded:0, oversBowled:0, highestScore:0, bestWickets:0 };
+            existing.wickets += wickets;
+            existing.runsConceded += runsConc;
+            existing.oversBowled += overs;
+            if(wickets > existing.bestWickets) existing.bestWickets = wickets;
+            await db.playerStats.put(existing);
+        }
+    }
 }
 
-async function clearDraft(matchId) {
-    await db.matchDrafts.where('matchId').equals(matchId).delete();
-}
-
-// ---------- SCORECARD MODAL (with draft support) ----------
-async function openScorecardForMatch(matchId) {
+// ---------- SCORECARD MODAL (toss, draft, edit) ----------
+async function openScorecardForMatch(matchId, isEdit = false) {
     let match = await db.matches.get(matchId);
     if(!match) return;
-    if(match.status === 'completed') {
-        Swal.fire("Match already completed", "You cannot edit a finished match.", "info");
+    if(match.status === 'completed' && !isEdit) {
+        Swal.fire("Match already completed", "Use Edit button to modify.", "info");
         return;
     }
     document.getElementById('currentMatchId').value = matchId;
@@ -302,7 +353,13 @@ async function openScorecardForMatch(matchId) {
         let teamDict = Object.fromEntries((await db.teams.toArray()).map(t=>[t.id, t]));
         document.getElementById('tossInfo').innerHTML = `<div class="badge" style="background:#ffe0b5;">Toss: ${teamDict[match.tossWinner]?.name} won and chose to ${match.tossDecision} first.</div>`;
         await loadScorecardForm(match, match.battingFirst);
-        await restoreDraft(matchId);  // restore any saved draft
+        if(match.rawScorecard) {
+            for(let key in match.rawScorecard) {
+                let input = document.querySelector(`[name="${key}"]`) || document.getElementById(key);
+                if(input) input.value = match.rawScorecard[key];
+            }
+        }
+        await restoreDraft(matchId);
     } else {
         let teams = await db.teams.toArray();
         let teamA = teams.find(t=>t.id === match.teamAId);
@@ -348,16 +405,16 @@ async function loadScorecardForm(match, battingFirstTeamId) {
     let container = document.getElementById('inningsContainer');
     container.innerHTML = `
         <div class="innings-block"><h4>🏏 Innings 1: ${firstBatTeam.name} Batting</h4>
-        ${firstBatPlayers.map(p => `<div style="display:flex; gap:8px; margin-bottom:6px;"><span style="width:120px;">${p.name}</span><input type="number" placeholder="Runs" class="runs_${firstBatTeam.id}_${p.id}" style="width:70px;"><input type="number" placeholder="Balls" class="balls_${firstBatTeam.id}_${p.id}" style="width:70px;"></div>`).join('')}
+        ${firstBatPlayers.map(p => `<div style="display:flex; gap:8px; margin-bottom:6px;"><span style="width:120px;">${p.name}</span><input type="number" placeholder="Runs" name="runs_${firstBatTeam.id}_${p.id}" class="runs_${firstBatTeam.id}_${p.id}" style="width:70px;"><input type="number" placeholder="Balls" name="balls_${firstBatTeam.id}_${p.id}" class="balls_${firstBatTeam.id}_${p.id}" style="width:70px;"></div>`).join('')}
         <h4>🎯 Bowling (${firstBowlingTeam.name})</h4>
-        ${firstBowlPlayers.map(p => `<div><span>${p.name}</span> <input type="number" placeholder="Overs (max 20)" class="overs_${firstBowlingTeam.id}_${p.id}" step="0.1" min="0" max="20" style="width:70px;"> <input type="number" placeholder="Runs" class="runsConc_${firstBowlingTeam.id}_${p.id}" style="width:70px;"> <input type="number" placeholder="Wickets" class="wickets_${firstBowlingTeam.id}_${p.id}" style="width:70px;"></div>`).join('')}
-        <div><label>Extras</label><input type="number" id="extras1" value="0"></div>
+        ${firstBowlPlayers.map(p => `<div><span>${p.name}</span> <input type="number" placeholder="Overs (max 20)" name="overs_${firstBowlingTeam.id}_${p.id}" class="overs_${firstBowlingTeam.id}_${p.id}" step="0.1" min="0" max="20" style="width:70px;"> <input type="number" placeholder="Runs" name="runsConc_${firstBowlingTeam.id}_${p.id}" class="runsConc_${firstBowlingTeam.id}_${p.id}" style="width:70px;"> <input type="number" placeholder="Wickets" name="wickets_${firstBowlingTeam.id}_${p.id}" class="wickets_${firstBowlingTeam.id}_${p.id}" style="width:70px;"></div>`).join('')}
+        <div><label>Extras</label><input type="number" name="extras1" id="extras1" value="0"></div>
         </div>
         <div class="innings-block"><h4>🏏 Innings 2: ${secondBatTeam.name} Batting</h4>
-        ${secondBatPlayers.map(p => `<div style="display:flex; gap:8px;"><span style="width:120px;">${p.name}</span><input type="number" placeholder="Runs" class="runs_${secondBatTeam.id}_${p.id}" style="width:70px;"><input type="number" placeholder="Balls" class="balls_${secondBatTeam.id}_${p.id}" style="width:70px;"></div>`).join('')}
+        ${secondBatPlayers.map(p => `<div style="display:flex; gap:8px;"><span style="width:120px;">${p.name}</span><input type="number" placeholder="Runs" name="runs_${secondBatTeam.id}_${p.id}" class="runs_${secondBatTeam.id}_${p.id}" style="width:70px;"><input type="number" placeholder="Balls" name="balls_${secondBatTeam.id}_${p.id}" class="balls_${secondBatTeam.id}_${p.id}" style="width:70px;"></div>`).join('')}
         <h4>🎯 Bowling (${secondBowlPlayers[0]?.teamId ? (secondBowlPlayers[0].teamId === teamA.id ? teamA.name : teamB.name) : ''})</h4>
-        ${secondBowlPlayers.map(p => `<div><span>${p.name}</span> <input type="number" placeholder="Overs (max 20)" class="overs_${secondBowlPlayers[0]?.teamId}_${p.id}" step="0.1" min="0" max="20" style="width:70px;"> <input type="number" placeholder="Runs" class="runsConc_${secondBowlPlayers[0]?.teamId}_${p.id}" style="width:70px;"> <input type="number" placeholder="Wickets" class="wickets_${secondBowlPlayers[0]?.teamId}_${p.id}" style="width:70px;"></div>`).join('')}
-        <div><label>Extras</label><input type="number" id="extras2" value="0"></div>
+        ${secondBowlPlayers.map(p => `<div><span>${p.name}</span> <input type="number" placeholder="Overs (max 20)" name="overs_${secondBowlPlayers[0]?.teamId}_${p.id}" class="overs_${secondBowlPlayers[0]?.teamId}_${p.id}" step="0.1" min="0" max="20" style="width:70px;"> <input type="number" placeholder="Runs" name="runsConc_${secondBowlPlayers[0]?.teamId}_${p.id}" class="runsConc_${secondBowlPlayers[0]?.teamId}_${p.id}" style="width:70px;"> <input type="number" placeholder="Wickets" name="wickets_${secondBowlPlayers[0]?.teamId}_${p.id}" class="wickets_${secondBowlPlayers[0]?.teamId}_${p.id}" style="width:70px;"></div>`).join('')}
+        <div><label>Extras</label><input type="number" name="extras2" id="extras2" value="0"></div>
         </div>`;
 }
 
@@ -366,7 +423,6 @@ window.closeScorecardModal = () => {
     document.getElementById('currentMatchId').value = '';
 };
 
-// Pause button handler
 document.getElementById('pauseMatchBtn')?.addEventListener('click', async () => {
     const matchId = parseInt(document.getElementById('currentMatchId').value);
     if(!matchId) return;
@@ -375,12 +431,42 @@ document.getElementById('pauseMatchBtn')?.addEventListener('click', async () => 
     closeScorecardModal();
 });
 
-// Complete match submission (with draft deletion)
+async function saveDraft(matchId) {
+    const match = await db.matches.get(matchId);
+    if(!match || match.status === 'completed') return false;
+    const container = document.getElementById('inningsContainer');
+    const inputs = container.querySelectorAll('input');
+    const draftData = {};
+    inputs.forEach(inp => {
+        draftData[inp.name || inp.id] = inp.value;
+    });
+    const tossInfoDiv = document.getElementById('tossInfo');
+    draftData.tossHtml = tossInfoDiv.innerHTML;
+    await db.matchDrafts.put({ matchId, draftData, updatedAt: new Date() });
+    return true;
+}
+
+async function restoreDraft(matchId) {
+    const draft = await db.matchDrafts.where('matchId').equals(matchId).first();
+    if(!draft) return false;
+    for(let key in draft.draftData) {
+        let input = document.querySelector(`[name="${key}"]`) || document.getElementById(key);
+        if(input) input.value = draft.draftData[key];
+    }
+    if(draft.draftData.tossHtml) document.getElementById('tossInfo').innerHTML = draft.draftData.tossHtml;
+    return true;
+}
+
+async function clearDraft(matchId) {
+    await db.matchDrafts.where('matchId').equals(matchId).delete();
+}
+
+// Save match (create or edit)
 document.getElementById('scorecardForm').onsubmit = async (e) => {
     e.preventDefault();
     let matchId = parseInt(document.getElementById('currentMatchId').value);
     let match = await db.matches.get(matchId);
-    if(!match || match.status === 'completed') { Swal.fire("Invalid or already completed"); closeScorecardModal(); return; }
+    if(!match) return;
 
     let teamA = match.teamAId, teamB = match.teamBId;
     let battingFirstId = match.battingFirst;
@@ -389,69 +475,73 @@ document.getElementById('scorecardForm').onsubmit = async (e) => {
     let playersA = await db.players.where('teamId').equals(teamA).toArray();
     let playersB = await db.players.where('teamId').equals(teamB).toArray();
 
-    let inningsData = { teamARuns:0, teamAOver:0, teamBRuns:0, teamBOver:0 };
-    let statsUpdates = [];
+    // Collect raw data
+    let rawData = {};
+    const container = document.getElementById('inningsContainer');
+    const inputs = container.querySelectorAll('input');
+    inputs.forEach(inp => {
+        if(inp.name) rawData[inp.name] = inp.value;
+        else if(inp.id) rawData[inp.id] = inp.value;
+    });
+    rawData.extras1 = document.getElementById('extras1')?.value || '0';
+    rawData.extras2 = document.getElementById('extras2')?.value || '0';
 
+    // Calculate innings totals from rawData (simplified)
     let firstBatTeamId = battingFirstId;
     let firstBowlTeamId = firstBatTeamId === teamA ? teamB : teamA;
-    let firstBatPlayersList = firstBatTeamId === teamA ? playersA : playersB;
-    let firstBowlPlayersList = firstBowlTeamId === teamA ? playersA : playersB;
-
-    let totalRuns1 = 0, totalOvers1 = 0;
-    for(let p of firstBatPlayersList) {
-        let runs = parseInt(document.querySelector(`.runs_${firstBatTeamId}_${p.id}`)?.value) || 0;
-        let balls = parseInt(document.querySelector(`.balls_${firstBatTeamId}_${p.id}`)?.value) || 0;
-        totalRuns1 += runs;
-        statsUpdates.push({ playerId: p.id, runs, balls, type: 'bat' });
-    }
-    for(let p of firstBowlPlayersList) {
-        let wickets = parseInt(document.querySelector(`.wickets_${firstBowlTeamId}_${p.id}`)?.value) || 0;
-        let runsConc = parseInt(document.querySelector(`.runsConc_${firstBowlTeamId}_${p.id}`)?.value) || 0;
-        let overs = parseFloat(document.querySelector(`.overs_${firstBowlTeamId}_${p.id}`)?.value) || 0;
-        if(overs > 20) { Swal.fire(`Overs cannot exceed 20 for ${p.name}`); return; }
-        totalOvers1 += overs;
-        statsUpdates.push({ playerId: p.id, wickets, runsConc, overs, type: 'bowl' });
-    }
-    let extras1 = parseInt(document.getElementById('extras1')?.value) || 0;
-    totalRuns1 += extras1;
-    if(firstBatTeamId === teamA) { inningsData.teamARuns = totalRuns1; inningsData.teamAOver = totalOvers1; }
-    else { inningsData.teamBRuns = totalRuns1; inningsData.teamBOver = totalOvers1; }
-
     let secondBatTeamId = firstBatTeamId === teamA ? teamB : teamA;
     let secondBowlTeamId = secondBatTeamId === teamA ? teamB : teamA;
-    let secondBatPlayersList = secondBatTeamId === teamA ? playersA : playersB;
-    let secondBowlPlayersList = secondBowlTeamId === teamA ? playersA : playersB;
+
+    let totalRuns1 = 0, totalOvers1 = 0;
+    for(let p of (firstBatTeamId === teamA ? playersA : playersB)) {
+        let runs = parseInt(rawData[`runs_${firstBatTeamId}_${p.id}`]) || 0;
+        totalRuns1 += runs;
+    }
+    for(let p of (firstBowlTeamId === teamA ? playersA : playersB)) {
+        let overs = parseFloat(rawData[`overs_${firstBowlTeamId}_${p.id}`]) || 0;
+        totalOvers1 += overs;
+    }
+    totalRuns1 += parseInt(rawData.extras1) || 0;
 
     let totalRuns2 = 0, totalOvers2 = 0;
-    for(let p of secondBatPlayersList) {
-        let runs = parseInt(document.querySelector(`.runs_${secondBatTeamId}_${p.id}`)?.value) || 0;
-        let balls = parseInt(document.querySelector(`.balls_${secondBatTeamId}_${p.id}`)?.value) || 0;
+    for(let p of (secondBatTeamId === teamA ? playersA : playersB)) {
+        let runs = parseInt(rawData[`runs_${secondBatTeamId}_${p.id}`]) || 0;
         totalRuns2 += runs;
-        statsUpdates.push({ playerId: p.id, runs, balls, type: 'bat' });
     }
-    for(let p of secondBowlPlayersList) {
-        let wickets = parseInt(document.querySelector(`.wickets_${secondBowlTeamId}_${p.id}`)?.value) || 0;
-        let runsConc = parseInt(document.querySelector(`.runsConc_${secondBowlTeamId}_${p.id}`)?.value) || 0;
-        let overs = parseFloat(document.querySelector(`.overs_${secondBowlTeamId}_${p.id}`)?.value) || 0;
-        if(overs > 20) { Swal.fire(`Overs cannot exceed 20 for ${p.name}`); return; }
+    for(let p of (secondBowlTeamId === teamA ? playersA : playersB)) {
+        let overs = parseFloat(rawData[`overs_${secondBowlTeamId}_${p.id}`]) || 0;
         totalOvers2 += overs;
-        statsUpdates.push({ playerId: p.id, wickets, runsConc, overs, type: 'bowl' });
     }
-    let extras2 = parseInt(document.getElementById('extras2')?.value) || 0;
-    totalRuns2 += extras2;
-    if(secondBatTeamId === teamA) { inningsData.teamARuns = totalRuns2; inningsData.teamAOver = totalOvers2; }
-    else { inningsData.teamBRuns = totalRuns2; inningsData.teamBOver = totalOvers2; }
+    totalRuns2 += parseInt(rawData.extras2) || 0;
+
+    let inningsData = {};
+    if(firstBatTeamId === teamA) {
+        inningsData.teamARuns = totalRuns1;
+        inningsData.teamAOver = totalOvers1;
+        inningsData.teamBRuns = totalRuns2;
+        inningsData.teamBOver = totalOvers2;
+    } else {
+        inningsData.teamARuns = totalRuns2;
+        inningsData.teamAOver = totalOvers2;
+        inningsData.teamBRuns = totalRuns1;
+        inningsData.teamBOver = totalOvers1;
+    }
 
     let winnerId = null;
     if(inningsData.teamARuns > inningsData.teamBRuns) winnerId = teamA;
     else if(inningsData.teamBRuns > inningsData.teamARuns) winnerId = teamB;
 
+    // Update match
     match.status = "completed";
     match.winnerId = winnerId;
     match.inningsData = inningsData;
+    match.rawScorecard = rawData;
     await db.matches.update(matchId, match);
-    await updateTournamentStats(currentTournamentId, statsUpdates);
-    await clearDraft(matchId);  // remove any draft after completion
+    
+    // Rebuild all stats from scratch
+    await rebuildAllStats(currentTournamentId);
+    
+    await clearDraft(matchId);
     Swal.fire("Match saved & stats updated!");
     closeScorecardModal();
     await refreshAllPanels();
@@ -471,10 +561,10 @@ async function forceGeneratePlayoffs() {
     if(standings.length < 4) { Swal.fire("Need at least 4 teams with points"); return; }
     let top4 = standings.slice(0,4).map(s => s.teamId);
     let [first, second, third, fourth] = top4;
-    await db.matches.add({ tournamentId: currentTournamentId, teamAId: first, teamBId: second, matchType: "Qualifier 1", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null });
-    await db.matches.add({ tournamentId: currentTournamentId, teamAId: third, teamBId: fourth, matchType: "Eliminator", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null });
-    await db.matches.add({ tournamentId: currentTournamentId, teamAId: null, teamBId: null, matchType: "Qualifier 2", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null });
-    await db.matches.add({ tournamentId: currentTournamentId, teamAId: null, teamBId: null, matchType: "Final", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null });
+    await db.matches.add({ tournamentId: currentTournamentId, teamAId: first, teamBId: second, matchType: "Qualifier 1", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null, rawScorecard: null });
+    await db.matches.add({ tournamentId: currentTournamentId, teamAId: third, teamBId: fourth, matchType: "Eliminator", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null, rawScorecard: null });
+    await db.matches.add({ tournamentId: currentTournamentId, teamAId: null, teamBId: null, matchType: "Qualifier 2", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null, rawScorecard: null });
+    await db.matches.add({ tournamentId: currentTournamentId, teamAId: null, teamBId: null, matchType: "Final", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff: 1, tossWinner: null, tossDecision: null, battingFirst: null, rawScorecard: null });
     Swal.fire("Playoffs generated manually!");
     await refreshAllPanels();
 }
@@ -524,7 +614,7 @@ document.getElementById('createCustomMatchBtn').onclick = async () => {
     let teamOpts = teams.map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
     let { value: ids } = await Swal.fire({ title: "Create Custom Match", html: `<select id="teamA">${teamOpts}</select> vs <select id="teamB">${teamOpts}</select>`, preConfirm:()=>{ return { teamA: document.getElementById('teamA').value, teamB: document.getElementById('teamB').value }; } });
     if(ids) {
-        await db.matches.add({ tournamentId: currentTournamentId, teamAId: parseInt(ids.teamA), teamBId: parseInt(ids.teamB), matchType: "custom", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff:0, tossWinner: null, tossDecision: null, battingFirst: null });
+        await db.matches.add({ tournamentId: currentTournamentId, teamAId: parseInt(ids.teamA), teamBId: parseInt(ids.teamB), matchType: "custom", status: "pending", winnerId: null, date: new Date().toISOString(), inningsData: null, isPlayoff:0, tossWinner: null, tossDecision: null, battingFirst: null, rawScorecard: null });
         await refreshAllPanels();
         Swal.fire("Custom match added!");
     }
@@ -548,5 +638,7 @@ document.querySelectorAll('.tab').forEach(tab=>{
 
 initDB().then(()=>refreshAllPanels());
 
-// Make rematchMatch available globally
+// Make functions globally available for HTML onclick
 window.rematchMatch = rematchMatch;
+window.editCompletedMatch = editCompletedMatch;
+window.openScorecardForMatch = openScorecardForMatch;
