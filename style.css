@@ -29,10 +29,24 @@ body {
     box-shadow: 0 6px 14px rgba(0,0,0,0.2);
 }
 
-.header h1 { font-size: 1.7rem; display: flex; align-items: center; gap: 8px; }
-.sub { font-size: 0.75rem; opacity: 0.9; margin-top: 5px; }
+.header h1 {
+    font-size: 1.7rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
 
-.container { max-width: 700px; margin: 18px auto; padding: 0 16px; }
+.sub {
+    font-size: 0.75rem;
+    opacity: 0.9;
+    margin-top: 5px;
+}
+
+.container {
+    max-width: 700px;
+    margin: 18px auto;
+    padding: 0 16px;
+}
 
 .card {
     background: white;
@@ -74,10 +88,19 @@ button {
     box-shadow: 0 2px 6px rgba(0,0,0,0.1);
 }
 
-button:active { transform: scale(0.96); }
+button:active {
+    transform: scale(0.96);
+}
 
-.btn-orange { background: var(--secondary); }
-.btn-outline { background: transparent; border: 1px solid var(--primary); color: var(--primary); }
+.btn-orange {
+    background: var(--secondary);
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid var(--primary);
+    color: var(--primary);
+}
 
 .stat-grid {
     display: grid;
@@ -94,10 +117,22 @@ button:active { transform: scale(0.96); }
     border: 1px solid #e9ecef;
 }
 
-.stat-number { font-size: 1.8rem; font-weight: 800; color: var(--secondary); }
-.stat-small { font-size: 0.8rem; color: #555; }
+.stat-number {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: var(--secondary);
+}
 
-.player-list { max-height: 280px; overflow-y: auto; }
+.stat-small {
+    font-size: 0.8rem;
+    color: #555;
+}
+
+.player-list {
+    max-height: 280px;
+    overflow-y: auto;
+}
+
 .player-row {
     display: flex;
     justify-content: space-between;
@@ -115,7 +150,10 @@ button:active { transform: scale(0.96); }
     border-left: 6px solid var(--primary);
 }
 
-.match-item:hover { background: #fff4e0; transform: translateX(3px); }
+.match-item:hover {
+    background: #fff4e0;
+    transform: translateX(3px);
+}
 
 .badge {
     background: #e9ecef;
@@ -142,7 +180,10 @@ button:active { transform: scale(0.96); }
     backdrop-filter: blur(3px);
 }
 
-.modal.active { visibility: visible; opacity: 1; }
+.modal.active {
+    visibility: visible;
+    opacity: 1;
+}
 
 .modal-content {
     background: white;
@@ -193,8 +234,15 @@ input, select, textarea {
     text-align: left;
 }
 
-.orange { color: #e67e22; font-weight: bold; }
-.purple { color: #8e44ad; font-weight: bold; }
+.orange {
+    color: #e67e22;
+    font-weight: bold;
+}
+
+.purple {
+    color: #8e44ad;
+    font-weight: bold;
+}
 
 .tab-bar {
     display: flex;
@@ -215,9 +263,14 @@ input, select, textarea {
     font-weight: bold;
 }
 
-.tab.active { background: var(--primary); color: white; }
+.tab.active {
+    background: var(--primary);
+    color: white;
+}
 
-.hidden-panel { display: none; }
+.hidden-panel {
+    display: none;
+}
 
 .note {
     background: #f1f3f4;
@@ -227,19 +280,23 @@ input, select, textarea {
     text-align: center;
     margin-top: 12px;
 }
-/* Rematch button on match cards */
-.rematch-btn {
-    background: #2196f3;
+
+/* Ranking button */
+#playerRankingsBtn {
+    background: #9c27b0;
     color: white;
     border: none;
-    border-radius: 20px;
-    padding: 4px 12px;
-    font-size: 0.7rem;
-    margin-left: 8px;
+    border-radius: 30px;
+    padding: 8px 16px;
+    font-size: 0.8rem;
     cursor: pointer;
 }
-.rematch-btn:active { transform: scale(0.95); }
-/* Edit button on match cards */
+
+#playerRankingsBtn:active {
+    transform: scale(0.96);
+}
+
+/* Edit button (only edit, no rematch) */
 .edit-btn {
     background: #ffc107;
     color: #333;
@@ -250,15 +307,30 @@ input, select, textarea {
     margin-left: 8px;
     cursor: pointer;
 }
-.edit-btn:active { transform: scale(0.95); }
-.rematch-btn {
-    background: #2196f3;
-    color: white;
-    border: none;
-    border-radius: 20px;
-    padding: 4px 12px;
-    font-size: 0.7rem;
-    margin-left: 8px;
-    cursor: pointer;
+
+.edit-btn:active {
+    transform: scale(0.95);
 }
-.rematch-btn:active { transform: scale(0.95); }
+
+/* Rankings modal lists */
+#rankRunsList, #rankWicketsList {
+    max-height: 250px;
+    overflow-y: auto;
+}
+
+#rankRunsList ol, #rankWicketsList ol {
+    margin: 0;
+    padding-left: 20px;
+}
+
+#rankRunsList li, #rankWicketsList li {
+    margin: 8px 0;
+    font-size: 0.9rem;
+}
+
+/* Responsive adjustments */
+@media (min-width: 768px) {
+    .modal-content {
+        max-width: 600px;
+    }
+}
