@@ -1,4 +1,4 @@
-const CACHE_NAME = "cricket-arena-v4";  // increment to v4 for new features
+const CACHE_NAME = "cricket-arena-v5";  // increment to v4 for new features
 const ASSETS_TO_CACHE = [
     "./",
     "./index.html",
