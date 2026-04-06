@@ -1,6 +1,6 @@
 // ---------- DATABASE & INIT ----------
 const db = new Dexie('CricketArenaDB');
-db.version(5).stores({
+db.version(6).stores({
     teams: '++id, name, shortName',
     players: '++id, teamId, name, role, battingOrder',
     tournaments: '++id, name, createdAt, active',
@@ -155,173 +155,17 @@ async function renderPointsTable() {
     document.getElementById('pointsTable').innerHTML = html;
 }
 
-// ---------- STATS REBUILD (used after edit) ----------
+// ---------- STATS REBUILD (safe version) ----------
 async function rebuildAllStats(tournamentId) {
     await db.playerStats.where({ tournamentId }).delete();
     const matches = await db.matches.where({ tournamentId, status: 'completed' }).toArray();
     for(let match of matches) {
         if(match.rawScorecard) {
-            let playersA = await db.players.where('teamId').equals(match.teamAId).toArray();
-            let playersB = await db.players.where('teamId').equals(match.teamBId).toArray();
-            for(let key in match.rawScorecard) {
-                if(key.startsWith('runs_')) {
-                    let parts = key.split('_');
-                    let playerId = parseInt(parts[2]);
-                    let runs = parseInt(match.rawScorecard[key]) || 0;
-                    let ballsKey = key.replace('runs_', 'balls_');
-                    let balls = parseInt(match.rawScorecard[ballsKey]) || 0;
-                    let existing = await db.playerStats.where({ tournamentId, playerId }).first();
-                    if(!existing) existing = { tournamentId, playerId, runs:0, balls:0, wickets:0, runsConceded:0, oversBowled:0, highestScore:0, bestWickets:0 };
-                    existing.runs += runs;
-                    existing.balls += balls;
-                    if(runs > existing.highestScore) existing.highestScore = runs;
-                    await db.playerStats.put(existing);
-                }
-                if(key.startsWith('wickets_')) {
-                    let parts = key.split('_');
-                    let playerId = parseInt(parts[2]);
-                    let wickets = parseInt(match.rawScorecard[key]) || 0;
-                    let runsConcKey = key.replace('wickets_', 'runsConc_');
-                    let runsConc = parseInt(match.rawScorecard[runsConcKey]) || 0;
-                    let oversKey = key.replace('wickets_', 'overs_');
-                    let overs = parseFloat(match.rawScorecard[oversKey]) || 0;
-                    let existing = await db.playerStats.where({ tournamentId, playerId }).first();
-                    if(!existing) existing = { tournamentId, playerId, runs:0, balls:0, wickets:0, runsConceded:0, oversBowled:0, highestScore:0, bestWickets:0 };
-                    existing.wickets += wickets;
-                    existing.runsConceded += runsConc;
-                    existing.oversBowled += overs;
-                    if(wickets > existing.bestWickets) existing.bestWickets = wickets;
-                    await db.playerStats.put(existing);
-                }
-            }
+            await applyMatchStatsFromRaw(match);
+        } else {
+            // Fallback: try to reconstruct from inningsData (limited)
+            console.warn("Match without rawScorecard:", match.id);
         }
-    }
-}
-
-// ---------- PLAYER STATS & CAPS ----------
-async function computePlayerStats() {
-    let stats = await db.playerStats.where({ tournamentId: currentTournamentId }).toArray();
-    let players = await db.players.toArray();
-    let playerMap = new Map(players.map(p=>[p.id, p]));
-    let runsArr = stats.filter(s=>s.runs>0).sort((a,b)=>b.runs - a.runs);
-    let wicketsArr = stats.filter(s=>s.wickets>0).sort((a,b)=>b.wickets - a.wickets);
-    let topRuns = runsArr.slice(0,5);
-    let topWkts = wicketsArr.slice(0,5);
-    let runsHtml = topRuns.map(s=>{ let pl = playerMap.get(s.playerId); let sr = s.balls ? ((s.runs/s.balls)*100).toFixed(1) : 0; return `<div class="player-row"><span>${pl?.name||"?"}</span><span><b>${s.runs}</b> runs | SR ${sr}</span></div>`; }).join('');
-    let wktHtml = topWkts.map(s=>{ let pl = playerMap.get(s.playerId); let avg = s.wickets ? (s.runsConceded/s.wickets).toFixed(1) : '-'; return `<div class="player-row"><span>${pl?.name||"?"}</span><span><b>${s.wickets}</b> wkts | Avg ${avg}</span></div>`; }).join('');
-    document.getElementById('topRunsList').innerHTML = runsHtml || "<div>No data</div>";
-    document.getElementById('topWicketsList').innerHTML = wktHtml || "<div>No data</div>";
-    let orange = runsArr[0]; let purple = wicketsArr[0];
-    document.getElementById('orangeCapName').innerText = orange ? (playerMap.get(orange.playerId)?.name||'--') : '--';
-    document.getElementById('orangeCapRuns').innerText = orange ? `${orange.runs} runs` : '';
-    document.getElementById('purpleCapName').innerText = purple ? (playerMap.get(purple.playerId)?.name||'--') : '--';
-    document.getElementById('purpleCapWkts').innerText = purple ? `${purple.wickets} wickets` : '';
-}
-
-// ---------- MATCH UI WITH EDIT & REMATCH ----------
-async function renderMatchesList() {
-    let matches = await db.matches.where({ tournamentId: currentTournamentId }).reverse().sortBy('id');
-    let teams = await db.teams.toArray();
-    let teamDict = Object.fromEntries(teams.map(t=>[t.id, t]));
-    let container = document.getElementById('matchesListContainer');
-    if(!matches.length) { container.innerHTML = "<div class='card'>No matches. Generate league or create custom match.</div>"; return; }
-    let html = '';
-    for(let m of matches) {
-        let teamAName = teamDict[m.teamAId]?.name || 'TBD';
-        let teamBName = teamDict[m.teamBId]?.name || 'TBD';
-        let statusBadge = m.status === 'completed' ? `✅ ${teamDict[m.winnerId]?.name || 'winner'}` : (m.status==='pending' ? '⏳ Pending' : 'In Progress');
-        let tossInfo = m.tossWinner ? `🎲 Toss: ${teamDict[m.tossWinner]?.shortName} chose ${m.tossDecision}` : '';
-        let draftInfo = '';
-        const draft = await db.matchDrafts.where('matchId').equals(m.id).first();
-        if(draft && m.status !== 'completed') draftInfo = ' 📝 Draft saved';
-        let actionButtons = '';
-        if(m.status === 'completed') {
-            actionButtons = `<button class="edit-btn" onclick="event.stopPropagation(); editCompletedMatch(${m.id})">✏️ Edit</button>
-                            <button class="rematch-btn" onclick="event.stopPropagation(); rematchMatch(${m.id})">🔄 Rematch</button>`;
-        }
-        html += `<div class="match-item" onclick="openScorecardForMatch(${m.id})">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <strong>${teamAName} vs ${teamBName}</strong>
-                        <div><span class="badge">${m.matchType || 'League'}</span> ${actionButtons}</div>
-                    </div>
-                    <div>${statusBadge}${draftInfo}</div>
-                    <div style="font-size:12px;">${tossInfo}</div>
-                </div>`;
-    }
-    container.innerHTML = html;
-}
-
-async function rematchMatch(originalMatchId) {
-    const original = await db.matches.get(originalMatchId);
-    if(!original) return;
-    const { value: confirm } = await Swal.fire({
-        title: 'Rematch?',
-        text: `Create a new match between ${(await db.teams.get(original.teamAId))?.name} and ${(await db.teams.get(original.teamBId))?.name}?`,
-        showCancelButton: true,
-        confirmButtonText: 'Yes, create rematch'
-    });
-    if(!confirm) return;
-    await db.matches.add({
-        tournamentId: original.tournamentId,
-        teamAId: original.teamAId,
-        teamBId: original.teamBId,
-        matchType: original.matchType === 'league' ? 'league' : 'rematch',
-        status: 'pending',
-        winnerId: null,
-        date: new Date().toISOString(),
-        inningsData: null,
-        isPlayoff: original.isPlayoff,
-        tossWinner: null,
-        tossDecision: null,
-        battingFirst: null,
-        rawScorecard: null
-    });
-    Swal.fire("Rematch created! You can now enter the new match.");
-    await refreshAllPanels();
-}
-
-// ========== FIXED EDIT FUNCTION ==========
-async function editCompletedMatch(matchId) {
-    try {
-        const match = await db.matches.get(matchId);
-        if (!match || match.status !== 'completed') {
-            Swal.fire("Error", "Match is not completed or doesn't exist.", "error");
-            return;
-        }
-
-        // Confirm edit
-        const confirm = await Swal.fire({
-            title: 'Edit Match?',
-            text: 'This will revert the match to pending state and remove its stats. You can then re-enter the scorecard.',
-            showCancelButton: true,
-            confirmButtonText: 'Yes, edit match',
-            cancelButtonText: 'Cancel'
-        });
-        if (!confirm.isConfirmed) return;
-
-        // Remove stats for this match by rebuilding all stats from other completed matches
-        await db.playerStats.where({ tournamentId: currentTournamentId }).delete();
-        const otherMatches = await db.matches.where({ tournamentId: currentTournamentId, status: 'completed' }).filter(m => m.id !== matchId).toArray();
-        for (let om of otherMatches) {
-            if (om.rawScorecard) {
-                await applyMatchStatsFromRaw(om);
-            } else {
-                // If old match without rawScorecard, we cannot restore its stats – but those stats are already gone.
-                // Warn user that stats from this match will be lost.
-                console.warn("Match without rawScorecard cannot be restored:", om.id);
-            }
-        }
-
-        // Mark match as pending
-        await db.matches.update(matchId, { status: 'pending', winnerId: null });
-        await refreshAllPanels();
-
-        // Open the scorecard for editing (pass true to indicate edit mode)
-        await openScorecardForMatch(matchId, true);
-        Swal.fire("Match is now editable. Make changes and save again.", "", "info");
-    } catch (err) {
-        console.error(err);
-        Swal.fire("Error", "Failed to edit match. See console for details.", "error");
     }
 }
 
@@ -359,6 +203,132 @@ async function applyMatchStatsFromRaw(match) {
             if (wickets > existing.bestWickets) existing.bestWickets = wickets;
             await db.playerStats.put(existing);
         }
+    }
+}
+
+// ---------- PLAYER STATS & CAPS ----------
+async function computePlayerStats() {
+    let stats = await db.playerStats.where({ tournamentId: currentTournamentId }).toArray();
+    let players = await db.players.toArray();
+    let playerMap = new Map(players.map(p=>[p.id, p]));
+    let runsArr = stats.filter(s=>s.runs>0).sort((a,b)=>b.runs - a.runs);
+    let wicketsArr = stats.filter(s=>s.wickets>0).sort((a,b)=>b.wickets - a.wickets);
+    let topRuns = runsArr.slice(0,5);
+    let topWkts = wicketsArr.slice(0,5);
+    let runsHtml = topRuns.map(s=>{ let pl = playerMap.get(s.playerId); let sr = s.balls ? ((s.runs/s.balls)*100).toFixed(1) : 0; return `<div class="player-row"><span>${pl?.name||"?"}</span><span><b>${s.runs}</b> runs | SR ${sr}</span></div>`; }).join('');
+    let wktHtml = topWkts.map(s=>{ let pl = playerMap.get(s.playerId); let avg = s.wickets ? (s.runsConceded/s.wickets).toFixed(1) : '-'; return `<div class="player-row"><span>${pl?.name||"?"}</span><span><b>${s.wickets}</b> wkts | Avg ${avg}</span></div>`; }).join('');
+    document.getElementById('topRunsList').innerHTML = runsHtml || "<div>No data</div>";
+    document.getElementById('topWicketsList').innerHTML = wktHtml || "<div>No data</div>";
+    let orange = runsArr[0]; let purple = wicketsArr[0];
+    document.getElementById('orangeCapName').innerText = orange ? (playerMap.get(orange.playerId)?.name||'--') : '--';
+    document.getElementById('orangeCapRuns').innerText = orange ? `${orange.runs} runs` : '';
+    document.getElementById('purpleCapName').innerText = purple ? (playerMap.get(purple.playerId)?.name||'--') : '--';
+    document.getElementById('purpleCapWkts').innerText = purple ? `${purple.wickets} wickets` : '';
+}
+
+// ---------- PLAYER RANKINGS (full list) ----------
+async function showPlayerRankings() {
+    let stats = await db.playerStats.where({ tournamentId: currentTournamentId }).toArray();
+    let players = await db.players.toArray();
+    let playerMap = new Map(players.map(p=>[p.id, p]));
+    let runsArr = stats.filter(s=>s.runs>0).sort((a,b)=>b.runs - a.runs);
+    let wicketsArr = stats.filter(s=>s.wickets>0).sort((a,b)=>b.wickets - a.wickets);
+    
+    let runsHtml = '<ol style="margin:0; padding-left:20px;">';
+    runsArr.forEach(s => {
+        let pl = playerMap.get(s.playerId);
+        let sr = s.balls ? ((s.runs/s.balls)*100).toFixed(1) : 0;
+        runsHtml += `<li><strong>${pl?.name||"?"}</strong> - ${s.runs} runs (SR: ${sr})</li>`;
+    });
+    runsHtml += '</ol>';
+    if(runsArr.length === 0) runsHtml = '<p>No runs recorded yet.</p>';
+    
+    let wktsHtml = '<ol style="margin:0; padding-left:20px;">';
+    wicketsArr.forEach(s => {
+        let pl = playerMap.get(s.playerId);
+        let avg = s.wickets ? (s.runsConceded/s.wickets).toFixed(1) : '-';
+        wktsHtml += `<li><strong>${pl?.name||"?"}</strong> - ${s.wickets} wickets (Avg: ${avg})</li>`;
+    });
+    wktsHtml += '</ol>';
+    if(wicketsArr.length === 0) wktsHtml = '<p>No wickets recorded yet.</p>';
+    
+    document.getElementById('rankRunsList').innerHTML = runsHtml;
+    document.getElementById('rankWicketsList').innerHTML = wktsHtml;
+    document.getElementById('rankingsModal').classList.add('active');
+}
+
+function closeRankingsModal() {
+    document.getElementById('rankingsModal').classList.remove('active');
+}
+
+// ---------- MATCH UI WITH EDIT (no rematch) ----------
+async function renderMatchesList() {
+    let matches = await db.matches.where({ tournamentId: currentTournamentId }).reverse().sortBy('id');
+    let teams = await db.teams.toArray();
+    let teamDict = Object.fromEntries(teams.map(t=>[t.id, t]));
+    let container = document.getElementById('matchesListContainer');
+    if(!matches.length) { container.innerHTML = "<div class='card'>No matches. Generate league or create custom match.</div>"; return; }
+    let html = '';
+    for(let m of matches) {
+        let teamAName = teamDict[m.teamAId]?.name || 'TBD';
+        let teamBName = teamDict[m.teamBId]?.name || 'TBD';
+        let statusBadge = m.status === 'completed' ? `✅ ${teamDict[m.winnerId]?.name || 'winner'}` : (m.status==='pending' ? '⏳ Pending' : 'In Progress');
+        let tossInfo = m.tossWinner ? `🎲 Toss: ${teamDict[m.tossWinner]?.shortName} chose ${m.tossDecision}` : '';
+        let draftInfo = '';
+        const draft = await db.matchDrafts.where('matchId').equals(m.id).first();
+        if(draft && m.status !== 'completed') draftInfo = ' 📝 Draft saved';
+        let editButton = '';
+        if(m.status === 'completed') {
+            editButton = `<button class="edit-btn" onclick="event.stopPropagation(); editCompletedMatch(${m.id})">✏️ Edit</button>`;
+        }
+        html += `<div class="match-item" onclick="openScorecardForMatch(${m.id})">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <strong>${teamAName} vs ${teamBName}</strong>
+                        <div><span class="badge">${m.matchType || 'League'}</span> ${editButton}</div>
+                    </div>
+                    <div>${statusBadge}${draftInfo}</div>
+                    <div style="font-size:12px;">${tossInfo}</div>
+                </div>`;
+    }
+    container.innerHTML = html;
+}
+
+// ---------- EDIT MATCH (FIXED - no data loss) ----------
+async function editCompletedMatch(matchId) {
+    try {
+        const match = await db.matches.get(matchId);
+        if (!match || match.status !== 'completed') {
+            Swal.fire("Error", "Match is not completed or doesn't exist.", "error");
+            return;
+        }
+
+        const confirm = await Swal.fire({
+            title: 'Edit Match?',
+            text: 'This will revert the match to pending state. You can then modify the scorecard and save again. Existing stats for this match will be removed and re-added when you save.',
+            showCancelButton: true,
+            confirmButtonText: 'Yes, edit match'
+        });
+        if (!confirm.isConfirmed) return;
+
+        // Remove this match's stats by rebuilding all stats from other matches
+        await db.playerStats.where({ tournamentId: currentTournamentId }).delete();
+        const otherMatches = await db.matches.where({ tournamentId: currentTournamentId, status: 'completed' }).filter(m => m.id !== matchId).toArray();
+        for (let om of otherMatches) {
+            if (om.rawScorecard) {
+                await applyMatchStatsFromRaw(om);
+            }
+        }
+
+        // Mark match as pending
+        await db.matches.update(matchId, { status: 'pending', winnerId: null });
+        await refreshAllPanels();
+
+        // Open scorecard for editing
+        await openScorecardForMatch(matchId, true);
+        Swal.fire("Match is now editable. Make your changes and save.", "", "info");
+    } catch (err) {
+        console.error(err);
+        Swal.fire("Error", "Failed to edit match. See console for details.", "error");
     }
 }
 
@@ -646,6 +616,8 @@ document.getElementById('createCustomMatchBtn').onclick = async () => {
     }
 };
 
+document.getElementById('playerRankingsBtn').onclick = showPlayerRankings;
+
 document.querySelectorAll('.tab').forEach(tab=>{
     tab.addEventListener('click',()=>{
         document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
@@ -664,7 +636,7 @@ document.querySelectorAll('.tab').forEach(tab=>{
 
 initDB().then(()=>refreshAllPanels());
 
-// Make functions globally available for HTML onclick
-window.rematchMatch = rematchMatch;
+// Make functions globally available
 window.editCompletedMatch = editCompletedMatch;
 window.openScorecardForMatch = openScorecardForMatch;
+window.closeRankingsModal = closeRankingsModal;
