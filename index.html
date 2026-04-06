@@ -15,7 +15,7 @@
 <body>
 <header class="header">
     <h1>🏏 Cricket Arena · Tournament Hub</h1>
-    <div class="sub">T20 | Toss | Auto Playoffs | Edit Match | Rematch</div>
+    <div class="sub">T20 | Toss | Edit Match | Player Rankings</div>
 </header>
 <div class="container">
     <div class="card">
@@ -34,6 +34,10 @@
         </div>
 
         <div id="dashboardPanel">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="card-title" style="margin:0;">🏆 Leaderboards</div>
+                <button id="playerRankingsBtn" style="background: #9c27b0; padding: 6px 12px;">👥 Player Rankings</button>
+            </div>
             <div class="stat-grid">
                 <div class="stat-badge"><div>🏆 ORANGE CAP</div><div id="orangeCapName" class="stat-number">-</div><div id="orangeCapRuns" class="stat-small"></div></div>
                 <div class="stat-badge"><div>💜 PURPLE CAP</div><div id="purpleCapName" class="stat-number">-</div><div id="purpleCapWkts" class="stat-small"></div></div>
@@ -55,6 +59,20 @@
             <button id="genLeagueBtn" style="background:#2c6e2f;">📅 Generate Double Round-Robin (30 matches)</button>
             <button id="genPlayoffsBtn" style="background:#b85c00;">🏆 Force Generate Playoffs</button>
             <p class="note">* Playoffs auto‑generate after all league matches are completed.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Player Rankings Modal -->
+<div id="rankingsModal" class="modal">
+    <div class="modal-content" style="max-width: 500px;">
+        <div class="close-modal" onclick="closeRankingsModal()">&times;</div>
+        <h3>📊 Player Rankings</h3>
+        <div style="margin-top: 15px;">
+            <h4>🏏 Most Runs</h4>
+            <div id="rankRunsList" style="max-height: 250px; overflow-y: auto;"></div>
+            <h4 style="margin-top: 15px;">🎯 Most Wickets</h4>
+            <div id="rankWicketsList" style="max-height: 250px; overflow-y: auto;"></div>
         </div>
     </div>
 </div>
