@@ -239,3 +239,26 @@ input, select, textarea {
     cursor: pointer;
 }
 .rematch-btn:active { transform: scale(0.95); }
+/* Edit button on match cards */
+.edit-btn {
+    background: #ffc107;
+    color: #333;
+    border: none;
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-size: 0.7rem;
+    margin-left: 8px;
+    cursor: pointer;
+}
+.edit-btn:active { transform: scale(0.95); }
+.rematch-btn {
+    background: #2196f3;
+    color: white;
+    border: none;
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-size: 0.7rem;
+    margin-left: 8px;
+    cursor: pointer;
+}
+.rematch-btn:active { transform: scale(0.95); }
